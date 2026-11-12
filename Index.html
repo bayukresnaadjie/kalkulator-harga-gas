@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kalkulator Harga Produk | ZIPZAP CORP</title>
+  <style>
+    :root { --red:#e60000; --ink:#1f2328; --line:#e3e5e8; --bg:#f6f7f8; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+    .wrap { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+    h1 { margin:0 0 4px; font-size:1.6rem; }
+    h1 span { color:var(--red); }
+    .sub { color:#667; margin:0 0 20px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; }
+    .card h2 { margin:0 0 14px; font-size:1.05rem; border-left:4px solid var(--red); padding-left:10px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; }
+    label { display:block; font-size:.85rem; font-weight:600; margin-bottom:6px; }
+    select, input[type=number] { width:100%; padding:10px; border:1px solid #cfd3d8; border-radius:8px; font-size:1rem; background:#fff; }
+    .sizes { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:12px; }
+    .sizes small { color:#778; font-weight:400; }
+    button { background:var(--red); color:#fff; border:0; padding:12px 28px; border-radius:8px; font-size:1rem; font-weight:700; cursor:pointer; }
+    button:hover { background:#c40000; }
+    button:disabled { opacity:.6; cursor:wait; }
+    .err { background:#fff1f1; color:#a00; border:1px solid #f3c2c2; padding:10px 14px; border-radius:8px; margin-bottom:16px; font-size:.9rem; }
+    table { width:100%; border-collapse:collapse; font-size:.92rem; }
+    th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#fafafa; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; }
+    .r { text-align:right; }
+    .scroll { overflow-x:auto; }
+    .breakdown { margin:0; padding:0; list-style:none; color:#555; font-size:.85rem; min-width:240px; }
+    .breakdown li { display:flex; justify-content:space-between; gap:12px; }
+    .breakdown li.sum { border-top:1px dashed #ccc; margin-top:4px; padding-top:4px; color:#111; font-weight:700; }
+    .disc td { color:#0a7a2f; }
+    .total td { font-size:1.1rem; font-weight:800; border-bottom:0; background:#fff7f7; }
+    .total td.amt { color:var(--red); }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+    .chip { background:#f1f2f4; border-radius:999px; padding:4px 12px; font-size:.82rem; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>ZIPZAP</span> CORP — Kalkulator Harga Produk</h1>
+  <p class="sub" id="promo"></p>
+
+  <div class="card">
+    <h2>Input Pesanan</h2>
+    <div id="error" class="err hidden"></div>
+
+    <div class="grid">
+      <div><label for="product">Jenis Produk</label><select id="product"></select></div>
+      <div><label for="color">Warna</label><select id="color"></select></div>
+      <div><label for="sleeve">Model Lengan</label><select id="sleeve"></select></div>
+      <div><label for="pocket">Saku</label><select id="pocket"></select></div>
+    </div>
+
+    <h2 style="margin-top:22px">Jumlah per Ukuran</h2>
+    <div class="sizes" id="sizes"></div>
+
+    <div style="margin-top:20px">
+      <button id="btn" type="button">Hitung Harga</button>
+    </div>
+  </div>
+
+  <div id="result" class="card hidden"></div>
+</div>
+
+<script>
+  // Konfigurasi dari server (Code.gs)
+  const CFG = <?!= JSON.stringify(getConfig()) ?>;
+
+  const rp  = n => 'Rp ' + Number(n).toLocaleString('id-ID');
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const $   = id => document.getElementById(id);
+
+  function init() {
+    $('promo').textContent =
+      'Hitung harga per pcs, subtotal per ukuran, dan total transaksi. Diskon ' +
+      CFG.discount.percent + '% untuk transaksi mulai ' + rp(CFG.discount.threshold) + '.';
+
+    fill('product', CFG.products, p => p.label + ' (' + rp(p.price) + ')');
+    fill('color',   CFG.colors,   c => c.label + (c.extra ? ' (+' + rp(c.extra) + ')' : ''));
+    fill('sleeve',  CFG.sleeves,  s => s.label + (s.extra ? ' (+' + rp(s.extra) + ')' : ''));
+
+    $('pocket').innerHTML =
+      '<option value="false">Tanpa saku</option>' +
+      '<option value="true">Ada saku (+' + esc(rp(CFG.pocketExtra)) + ')</option>';
+
+    $('sizes').innerHTML = CFG.sizes.map(s =>
+      '<div><label for="qty-' + esc(s.code) + '">' + esc(s.code) +
+      (s.extra ? ' <small>(+' + s.extra.toLocaleString('id-ID') + ')</small>' : '') + '</label>' +
+      '<input type="number" min="0" step="1" value="0" id="qty-' + esc(s.code) + '"></div>'
+    ).join('');
+
+    $('btn').addEventListener('click', submit);
+  }
+
+  function fill(id, obj, text) {
+    $(id).innerHTML = Object.keys(obj).map(k =>
+      '<option value="' + esc(k) + '">' + esc(text(obj[k])) + '</option>').join('');
+  }
+
+  function showError(msg) {
+    const el = $('error');
+    el.textContent = msg;
+    el.classList.toggle('hidden', !msg);
+  }
+
+  function submit() {
+    showError('');
+    const quantities = {};
+    CFG.sizes.forEach(s => { quantities[s.code] = Number($('qty-' + s.code).value || 0); });
+
+    const payload = {
+      product: $('product').value,
+      color: $('color').value,
+      sleeve: $('sleeve').value,
+      pocket: $('pocket').value === 'true',
+      quantities: quantities
+    };
+
+    $('btn').disabled = true;
+    $('btn').textContent = 'Menghitung...';
+
+    google.script.run
+      .withSuccessHandler(r => { done(); render(r); })
+      .withFailureHandler(e => {
+        done();
+        $('result').classList.add('hidden');
+        showError((e && e.message ? e.message : String(e)).replace(/^Error:\s*/, ''));
+      })
+      .calculatePrice(payload);
+  }
+
+  function done() {
+    $('btn').disabled = false;
+    $('btn').textContent = 'Hitung Harga';
+  }
+
+  function render(r) {
+    const rows = r.rows.map(row => {
+      const lines = row.components.map((c, i) =>
+        '<li><span>' + esc(c.label) + '</span><span>' +
+        (c.amount ? (i === 0 ? '' : '+ ') + esc(rp(c.amount)) : '-') + '</span></li>').join('');
+      return '<tr>' +
+        '<td><b>' + esc(row.size) + '</b></td>' +
+        '<td class="r">' + row.qty + ' pcs</td>' +
+        '<td><ul class="breakdown">' + lines +
+          '<li class="sum"><span>Harga per pcs</span><span>' + esc(rp(row.unitPrice)) + '</span></li></ul></td>' +
+        '<td class="r"><b>' + esc(rp(row.subtotal)) + '</b><br><small style="color:#778">' +
+          row.qty + ' × ' + esc(rp(row.unitPrice)) + '</small></td></tr>';
+    }).join('');
+
+    const discount = r.discountApplied
+      ? '<tr><td colspan="3" class="r">Subtotal (' + r.totalQty + ' pcs)</td><td class="r">' + esc(rp(r.subtotal)) + '</td></tr>' +
+        '<tr class="disc"><td colspan="3" class="r">Diskon ' + r.discountPercent + '% (transaksi mulai ' +
+          esc(rp(r.discountThreshold)) + ')</td><td class="r">- ' + esc(rp(r.discountAmount)) + '</td></tr>'
+      : '';
+
+    $('result').innerHTML =
+      '<h2>Hasil Perhitungan</h2>' +
+      '<div class="chips">' +
+        '<span class="chip">Produk: <b>' + esc(r.summary.product) + '</b></span>' +
+        '<span class="chip">Warna: <b>' + esc(r.summary.color) + '</b></span>' +
+        '<span class="chip">' + esc(r.summary.sleeve) + '</span>' +
+        '<span class="chip">Saku: ' + esc(r.summary.pocket) + '</span></div>' +
+      '<div class="scroll"><table><thead><tr><th>Size</th><th class="r">Jumlah</th>' +
+      '<th>Harga per pcs (rincian)</th><th class="r">Subtotal</th></tr></thead><tbody>' +
+      rows + discount +
+      '<tr class="total"><td>TOTAL</td><td class="r">' + r.totalQty + ' pcs</td><td></td>' +
+      '<td class="r amt">' + esc(rp(r.grandTotal)) + '</td></tr></tbody></table></div>';
+
+    $('result').classList.remove('hidden');
+    $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  init();
+</script>
+</body>
+</html>
